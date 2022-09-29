@@ -1,0 +1,9 @@
+venv
+venv/
+/venv
+.idea/.gitignore
+.idea/Kafka_Certification.iml
+.idea/inspectionProfiles/profiles_settings.xml
+.idea/misc.xml
+.idea/modules.xml
+.idea/
