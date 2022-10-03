@@ -52,6 +52,8 @@ try:
     while True:
         record = consumer.poll(timeout=1)
 
+        record_id = str(record.topic()) + "_" + str(record.partition() )+ "_" + str(record.offset())
+
         if record is None:
             continue
         if record.error():
@@ -70,7 +72,7 @@ try:
                     mylogger.info("The {} already exists".format(index_request))
                     mylogger.info(index_name)
                     mylogger.info(str(record.value()))
-                    openSearchClient.index(index=index_name, body=record.value(), format='str', ignore=True)
+                    openSearchClient.index(index=index_name, id=record_id, body=record.value(), format='str', ignore=True)
                     # mylogger.info(response)
                 else:
                     response = openSearchClient.indices.create(index_name, body=record.value())
@@ -78,7 +80,7 @@ try:
                     mylogger.info("The {} Index had been created!".format(index_request))
                     mylogger.info(index_name)
                     mylogger.info(str(record.value()))
-                    openSearchClient.index(index=index_name, body=str(record.value()))
+                    openSearchClient.index(index=index_name, id=record_id, body=str(record.value()))
 
             except Exception as e:  # bad entries
                 mylogger.info(e)
