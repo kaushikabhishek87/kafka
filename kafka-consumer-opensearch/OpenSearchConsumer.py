@@ -1,13 +1,23 @@
-from confluent_kafka import DeserializingConsumer
+from confluent_kafka import DeserializingConsumer, Consumer # DeserializingConsumer dont have batch
 from confluent_kafka.serialization import StringDeserializer
 import logging
-from opensearchpy import OpenSearch
+from opensearchpy import OpenSearch, helpers
 from confluent_kafka import KafkaException
+import json
+
 
 # logging
 mylogger = logging.getLogger()
 mylogger.addHandler(logging.StreamHandler())
 mylogger.setLevel(logging.DEBUG)
+
+# Extract ID
+
+
+def extract_id(value):
+    value_json = json.loads(value)
+    return str(value_json['meta']['id'])
+
 
 # kafka consumer
 bootstrap_server = 'localhost:9092'
@@ -15,15 +25,16 @@ topic = 'wikimedia.recent.change'
 group_id = 'consumer-opensearch-demo'
 
 config = {'bootstrap.servers': bootstrap_server,
-          'key.deserializer': StringDeserializer(),
-          'value.deserializer': StringDeserializer(),
           'group.id': group_id,
-          'auto.offset.reset': 'earliest',
+          # 'key.deserializer': StringDeserializer(),
+          # 'value.deserializer': StringDeserializer(),
+          'auto.offset.reset': 'latest',
           'logger': mylogger,
-          'debug': 'all'
+          'debug': 'all',
+          'enable.auto.commit': 'false',
           }
 
-consumer = DeserializingConsumer(conf=config)
+consumer = Consumer(**config)
 consumer.subscribe(topics=[topic])
 
 # create an open search client
@@ -50,40 +61,62 @@ index_name = 'wikimedia'
 
 try:
     while True:
-        record = consumer.poll(timeout=1)
 
-        record_id = str(record.topic()) + "_" + str(record.partition() )+ "_" + str(record.offset())
+        records = consumer.consume(num_messages=500)
 
-        if record is None:
-            continue
-        if record.error():
-            KafkaException(record.error())
-        else:
-            # mylogger.info("Record value = {}".format(record.value().format(str)))
-            # message_count = record
-            # mylogger.info('Received ', message_count, " records")
+        bulk_data = []
+        for record in records:
+            # Strategry 1
+            # record_id = str(record.topic()) + "_" + str(record.partition()) + "_" + str(record.offset())
 
-            index_request = index_name
+            if record is None:
+                continue
+            if record.error():
+                KafkaException(record.error())
+            else:
+                # mylogger.info("Record value = {}".format(record.value().format(str)))
+                # message_count = record
+                # mylogger.info('Received ', message_count, " records")
 
-            index_exists = openSearchClient.indices.exists(index_request)
+                index_request = index_name
 
-            try:
-                if index_exists:
-                    mylogger.info("The {} already exists".format(index_request))
-                    mylogger.info(index_name)
-                    mylogger.info(str(record.value()))
-                    openSearchClient.index(index=index_name, id=record_id, body=record.value(), format='str', ignore=True)
-                    # mylogger.info(response)
-                else:
-                    response = openSearchClient.indices.create(index_name, body=record.value())
-                    mylogger.info(response)
-                    mylogger.info("The {} Index had been created!".format(index_request))
-                    mylogger.info(index_name)
-                    mylogger.info(str(record.value()))
-                    openSearchClient.index(index=index_name, id=record_id, body=str(record.value()))
+                index_exists = openSearchClient.indices.exists(index_request)
+                 # https://dylancastillo.co/opensearch-python/
+                try:
+                    # Strategy 2
+                    record_id = extract_id(record.value())
+                    if index_exists:
+                        mylogger.info("The {} already exists".format(index_request))
+                        mylogger.info(index_name)
+                        mylogger.info(str(record.value()))
 
-            except Exception as e:  # bad entries
-                mylogger.info(e)
+                        # openSearchClient.index(index=index_name, id=record_id, body=record.value(), format='str',
+                        #                        ignore=True)
+                        # mylogger.info(response)
+
+                        bulk_data.append({'_index': index_name,
+                                          '_id': record_id,
+                                          '_body': str(record.value())})
+
+                    else:
+                        response = openSearchClient.indices.create(index_name, body=record.value())
+                        mylogger.info(response)
+                        mylogger.info("The {} Index had been created!".format(index_request))
+                        mylogger.info(index_name)
+                        mylogger.info(str(record.value()))
+                        bulk_data.append({'_index': index_name,
+                                               'id': record_id,
+                                               '_body': str(record.value())})
+
+                except Exception as e:  # bad entries
+                    mylogger.info(e)
+
+        if len(bulk_data) > 0:
+            mylogger.info('Bulk Size {}'.format(len(bulk_data)))
+            bulk_response = helpers.bulk(openSearchClient, bulk_data)
+            # mylogger.info(bulk_response)
+            consumer.commit()  # asynchronus True by default
+            mylogger.info('Offset have been commited!')
 
 except KeyboardInterrupt:
     mylogger.info('Closed by user!')
@@ -92,3 +125,5 @@ except KeyboardInterrupt:
 finally:
     consumer.close()
     openSearchClient.close()
+
+print(len(bulk_data))
